@@ -1,0 +1,14 @@
+# Python
+__pycache__/
+*.pyc
+.Python
+env/
+venv/
+*.env
+.env
+.DS_Store
+.idea/
+# Gemini API specific
+*.log
+output/
+temp_images/
