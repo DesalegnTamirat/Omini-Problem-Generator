@@ -25,7 +25,7 @@ class MathQnAPipeline:
         output_base_dir: Path = OUTPUT_DIR,
         temp_image_output_dir: Path = TEMP_IMAGE_OUTPUT_DIR,
         max_pdf_pages_to_process: int = 7, # Default limit for PDF processing
-        process_images_from_folder: bool = True, # Flag to enable/disable processing images from input_image_folder
+        process_images_from_folder: bool = False, # Flag to enable/disable processing images from input_image_folder
         process_pdfs_from_folder: bool = False # Flag to enable/disable processing PDFs from input_pdf_folder
     ):
         """
@@ -72,6 +72,7 @@ class MathQnAPipeline:
         all_source_image_paths: List[Path] = []
 
         # --- Phase 1: Collect Image Paths from Image Directory ---
+        print("image processing allowed:", self.process_images_from_folder)
         if self.process_images_from_folder:
             print("\n--- Phase 1: Collecting Image Paths from dedicated image folder ---")
             supported_extensions = ['*.png', '*.jpg', '*.jpeg', '*.gif', '*.bmp', '*.tiff'] 

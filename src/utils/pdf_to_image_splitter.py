@@ -3,7 +3,6 @@ from pathlib import Path
 from typing import List, Optional
 from pdf2image import convert_from_path
 from PyPDF2 import PdfReader
-import os
 
 def split_pdf_pages_as_image_pdfs(input_pdf_path: Path, output_dir: Path, max_pages: Optional[int] = None) -> List[Path]:
     """

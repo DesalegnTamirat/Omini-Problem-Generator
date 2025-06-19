@@ -3,23 +3,16 @@ import google.generativeai as genai
 from google.api_core import exceptions
 from PIL import Image
 from pathlib import Path
-import io
 import time
 import json
 import re
 from typing import Dict, Any, List, Tuple
+from google.generativeai.types import HarmCategory, HarmBlockThreshold
 
 # Import the initialized model instance from gemini_api
 from src.utils.gemini_api import model # Ensure 'model' is imported
 
 # --- API Configuration and Utilities ---
-def configure_gemini():
-    """
-    No-op function for consistency, as genai.configure is now handled in src/utils/gemini_api.py.
-    This function can remain if older calls expect it, but its actual work is elsewhere.
-    """
-    pass # Configuration is handled in src/utils/gemini_api.py on import
-
 def _extract_and_clean_json(text: str) -> str:
     """
     Extracts a JSON string from a larger text, handling markdown code blocks
@@ -48,34 +41,66 @@ def _extract_and_clean_json(text: str) -> str:
 
     return text
 
-def _robust_json_load(json_string: str, call_description: str = "JSON parse") -> Dict[str, Any]:
+
+
+def _robust_json_load(json_string: str, call_description: str = "JSON parsing"):
     """
-    Attempts to load a JSON string, handling common parsing errors.
+    Attempts to load a JSON string, with robust error handling and heuristics for common
+    LLM-generated JSON malformations, especially those involving LaTeX/backslashes.
+    Returns a dictionary or None if parsing completely fails.
     """
+    if not json_string.strip():
+        print(f"    [X] {call_description}: Received empty or whitespace-only string for JSON parsing.")
+        return None
+
+    # Attempt 1: Direct parse
     try:
         return json.loads(json_string)
     except json.JSONDecodeError as e:
-        print(f"    [X] JSONDecodeError during {call_description}: {e}")
-        print(f"        Problematic JSON string (first 500 chars): {json_string[:500]}...")
-        # Attempt a more lenient parsing if simple json.loads fails
-        try:
-            # Basic cleanup before re-attempting parse for common issues
-            cleaned_string = re.sub(r',\s*}', '}', json_string) # Remove trailing commas before '}'
-            cleaned_string = re.sub(r',\s*]', ']', cleaned_string) # Remove trailing commas before ']'
-            # Try to fix unescaped newlines within strings (basic heuristic)
-            cleaned_string = re.sub(r'(?<!\\)\n', r'\\n', cleaned_string) # Replace unescaped newlines with '\n'
+        print(f"    [X] {call_description}: JSONDecodeError on first attempt: {e}")
+        problematic_char_pos = e.pos
+        context_start = max(0, problematic_char_pos - 50)
+        context_end = min(len(json_string), problematic_char_pos + 50)
+        print(f"        Problematic JSON snippet: '{json_string[context_start:context_end]}'")
+        print(f"        Error at character {problematic_char_pos}")
 
+        cleaned_string = json_string
+
+        # Attempt 2: Fix unescaped backslashes (common for LaTeX in JSON)
+        if "Invalid \\escape" in str(e):
+            print(f"    {call_description}: Attempting targeted fix for unescaped LaTeX backslashes...")
+
+            # Replace backslashes not followed by a valid escape character with a double backslash
+            cleaned_string = re.sub(r'\\(?![\\/"bfnrtu])', r'\\\\', cleaned_string)
+
+            # Fix common LaTeX escapes like \( \) \[ \]
+            cleaned_string = re.sub(r'\\([\(\)\[\]])', r'\\\\\1', cleaned_string)
+
+            # Fix LaTeX commands like \alpha → \\alpha
+            cleaned_string = re.sub(r'\\([a-zA-Z]+)', r'\\\\\1', cleaned_string)
+
+            print(f"        Backslash fixed string (start): {cleaned_string[:200]}...")
+
+        # Attempt 3: Remove trailing commas
+        cleaned_string = re.sub(r',\s*([}\]])', r'\1', cleaned_string)
+
+        # Final attempt to parse
+        try:
             return json.loads(cleaned_string)
-        except json.JSONDecodeError as e_cleaned:
-            print(f"    [X] JSONDecodeError even after cleanup for {call_description}: {e_cleaned}")
-            print(f"        Cleaned JSON string (first 500 chars): {cleaned_string[:500]}...")
-            return {} # Return empty dict on severe parsing failure
-        except Exception as e_other:
-            print(f"    [X] Other error during JSON cleanup/re-parse for {call_description}: {e_other}")
-            return {}
+        except json.JSONDecodeError as inner_e:
+            print(f"    [X] {call_description}: JSONDecodeError even after cleanup: {inner_e}")
+            print(f"        Cleaned JSON string (first 500 chars): {cleaned_string[:500]}...")
+            return None
+        except Exception as other_e:
+            print(f"    [X] {call_description}: Unexpected error during JSON cleanup/re-parse: {other_e}")
+            return None
+
     except Exception as e:
-        print(f"    [X] Unexpected error during {call_description}: {e}")
-        return {}
+        print(f"    [X] {call_description}: Unexpected top-level error in robust JSON loading: {e}")
+        return None
+
+
+
 
 def load_image_from_path(image_path: Path) -> Image.Image:
     """Loads an image from a given path."""
@@ -87,6 +112,8 @@ def load_image_from_path(image_path: Path) -> Image.Image:
     except Exception as e:
         print(f"    [X] Error loading image {image_path}: {e}")
         raise
+
+
 
 def call_gemini_api_with_retries(
     model_instance: genai.GenerativeModel,
@@ -118,16 +145,46 @@ def call_gemini_api_with_retries(
             else:
                 print(f"    [!] No usage_metadata found for {call_description} attempt {attempt}.")
 
-            # Check for empty or blocked responses
+            # --- START OF CRITICAL FIX ---
+            # Check for prompt feedback issues (e.g., input blocked by safety)
+            if response.prompt_feedback and response.prompt_feedback.block_reason:
+                
+                block_reason_name = genai.types.HarmBlockReason(response.prompt_feedback.block_reason).name
+                print(f"    [X] {call_description} attempt {attempt}: Prompt blocked by safety settings. Reason: {block_reason_name}. Skipping retries.")
+                return None, 0, 0, 0.0 # Exit immediately for blocked prompts
+
+            # If no candidates are returned, it's an issue with generation
             if not response.candidates:
-                print(f"    [X] {call_description} attempt {attempt}: Response has no candidates. Retrying...")
+                print(f"    [X] {call_description} attempt {attempt}: Response has no candidates. This usually means generation failed. Retrying...")
                 raise ValueError("No candidates in response")
-            if response.candidates[0].finish_reason == genai.protos.FinishReason.SAFETY:
-                print(f"    [X] {call_description} attempt {attempt}: Response blocked by safety settings. Skipping retries for safety block.")
-                return None, 0, 0, 0.0 # Do not retry on safety blocks
+            
+            # Check the finish reason of the first candidate (e.g., output blocked by safety)
+            # Accessing finish_reason directly from the candidate object
+            if response.candidates[0].finish_reason:
+                # Use .name to get string representation from the enum
+                finish_reason_name = response.candidates[0].finish_reason.name
+                if finish_reason_name == 'SAFETY':
+                    print(f"    [X] {call_description} attempt {attempt}: Candidate blocked by safety settings (Finish Reason: SAFETY). Skipping retries.")
+                    return None, 0, 0, 0.0 # Exit immediately for safety-blocked candidates
+                elif finish_reason_name == 'STOP':
+                    # This is the desired outcome for successful generation
+                    pass
+                else:
+                    print(f"    [W] {call_description} attempt {attempt}: Unexpected finish reason: {finish_reason_name}. Content might be incomplete.")
+
+            # If the first candidate exists but has no content parts, it's also a problem
             if not response.candidates[0].content.parts:
                 print(f"    [X] {call_description} attempt {attempt}: Response candidate has no content parts. Retrying...")
                 raise ValueError("No content parts in candidate")
+            # --- END OF CRITICAL FIX ---
+
+            # --- NEW DEBUG PRINT (if you still want it, keep it here) ---
+            raw_gemini_text_response = ""
+            if response.candidates and response.candidates[0].content.parts:
+                raw_gemini_text_response = response.candidates[0].content.parts[0].text
+            print(f"    [DEBUG_RAW] Raw Gemini Response ({call_description}):\n---START RAW---\n{raw_gemini_text_response[:500]}...\n---END RAW---")
+            # --- END NEW DEBUG PRINT ---
+
 
             print(f"    [+] {call_description} successful (attempt {attempt}, took {duration:.2f}s). Tokens: (P:{prompt_tokens}, C:{candidate_tokens})")
             return response, prompt_tokens, candidate_tokens, duration
@@ -146,6 +203,7 @@ def call_gemini_api_with_retries(
             print(f"    [X] An unexpected error occurred during {call_description}: {e}")
             return None, 0, 0, 0.0
     return None, 0, 0, 0.0 # Should not be reached, but for type hinting
+
 
 # --- Gemini Specific Q&A Generation Functions ---
 
@@ -335,6 +393,7 @@ def gemini_extract_final_answer_from_solution(solution_text: str, model_instance
             call_description="Final answer extraction"
         )
         extracted_answer = "N/A"
+        print("answer Response", response)
         if response and response.candidates and response.candidates[0].content.parts:
             extracted_answer = response.candidates[0].content.parts[0].text.strip()
             # Basic cleanup: sometimes it might wrap in markdown even if not requested

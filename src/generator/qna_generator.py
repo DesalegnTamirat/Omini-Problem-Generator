@@ -3,8 +3,6 @@ import pandas as pd
 from pathlib import Path
 from typing import Dict, Any, List
 import google.generativeai as genai
-
-# Import utility functions from gemini_api_utils
 from src.utils import gemini_api_utils
 
 class QnAGenerator:
