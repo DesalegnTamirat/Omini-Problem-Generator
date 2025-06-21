@@ -1,2 +1,0 @@
-1. Nice Logging environment
-2. have added _robust_json_load and _extract_and_clean_json functions for extracting and cleaning json responses

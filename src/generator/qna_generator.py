@@ -1,5 +1,6 @@
 # src/generator/qna_generator.py
 import pandas as pd
+import json
 from pathlib import Path
 from typing import Dict, Any, List
 import google.generativeai as genai

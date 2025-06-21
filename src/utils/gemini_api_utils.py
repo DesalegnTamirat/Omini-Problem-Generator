@@ -264,7 +264,9 @@ def gemini_generate_qna_and_solution(image_path: Path, extracted_latex : str, mo
             "challenging math problem, a detailed step-by-step solution, "
             "a single canonical final answer, an array of critical expressions in LaTeX, "
             "an array of key topics, and an array of critical steps. "
-            "Format the output as a JSON object with the following keys: "
+            "Format the output as a single, valid JSON"
+            "IMPORTANT: Within the JSON string values, all backslashes `\` must be properly escaped as `\\\\`. For example, `\lambda` must be written as `\\\\lambda` and newlines `\n` as `\\\\n`."
+            " object The JSON object must have the following keys: "
             "'question', 'solution', 'final_answer' (string in LaTeX if applicable), "
             "'critical_expressions' (array of LaTeX strings), 'topics' (array of strings), "
             "and 'critical_steps' (array of strings).",
@@ -393,7 +395,6 @@ def gemini_extract_final_answer_from_solution(solution_text: str, model_instance
             call_description="Final answer extraction"
         )
         extracted_answer = "N/A"
-        print("answer Response", response)
         if response and response.candidates and response.candidates[0].content.parts:
             extracted_answer = response.candidates[0].content.parts[0].text.strip()
             # Basic cleanup: sometimes it might wrap in markdown even if not requested
