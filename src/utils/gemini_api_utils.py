@@ -7,7 +7,6 @@ import time
 import json
 import re
 from typing import Dict, Any, List, Tuple
-from google.generativeai.types import HarmCategory, HarmBlockThreshold
 
 # Import the initialized model instance from gemini_api
 from src.utils.gemini_api import model # Ensure 'model' is imported
@@ -119,8 +118,8 @@ def call_gemini_api_with_retries(
     model_instance: genai.GenerativeModel,
     prompt_content: Any, # Can be str, list of Parts, etc.
     call_description: str = "API call",
-    max_retries: int = 5,
-    base_delay: float = 2.0
+    max_retries: int = 3,
+    base_delay: float = 1.0
 ) -> Tuple[Any, int, int, float]: # response, prompt_tokens, candidate_tokens, duration
     """
     Calls the Gemini API with exponential back-off and retries for common transient errors.
